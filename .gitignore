@@ -17,6 +17,13 @@
 /.next/
 /out/
 
+# system files
+*.http
+/.idea/
+AGENTS.md
+CLAUDE.md
+
+
 # production
 /build
 

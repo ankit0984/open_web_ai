@@ -1,376 +1,416 @@
 "use client";
 
-import { motion, useMotionValue, useSpring, useTransform } from "framer-motion";
-import { useRouter, usePathname } from "next/navigation";
-import { useEffect, useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Telescope, Compass, Radio } from "lucide-react";
+import { Plus, Paperclip, ArrowUpIcon, ChevronDown, ChevronUp, Square, X } from "lucide-react";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import ReactMarkdown from "react-markdown";
 
-/* ─────────────────────────────────────────────
-   Animation variants
-───────────────────────────────────────────── */
-const fadeUp = {
-    hidden: { opacity: 0, y: 24 },
-    visible: (delay = 0) => ({
-        opacity: 1,
-        y: 0,
-        transition: { duration: 0.55, ease: [0.22, 1, 0.36, 1], delay },
-    }),
-};
+const THINKING_MODELS = ["deepseek-r1", "qwq", "qwen3"];
+const VISION_MODELS = ["gemma3", "gemma4", "medgemma", "llava", "moondream"];
 
-const stagger = {
-    hidden: {},
-    visible: { transition: { staggerChildren: 0.09, delayChildren: 0.2 } },
-};
+const isThinkingModel = (m) => THINKING_MODELS.some((t) => m.toLowerCase().includes(t));
+const isVisionModel = (m) => VISION_MODELS.some((t) => m.toLowerCase().includes(t));
 
-/* ─────────────────────────────────────────────
-   Shared atmosphere
-───────────────────────────────────────────── */
-function Scanlines() {
-    return (
-        <div
-            aria-hidden
-            className="pointer-events-none fixed inset-0 z-50 opacity-[0.04] mix-blend-overlay"
-            style={{
-                backgroundImage:
-                    "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.15) 2px, rgba(255,255,255,0.15) 4px)",
-            }}
-        />
-    );
+// Only strip junk on final rendered text, never on raw streaming content
+function stripJunk(text) {
+  return text
+    .replace(/&lt;[^&]*&gt;/g, "") // Remove &lt;unused94&gt; etc
+    .replace(/&#39;/g, "'") // Replace &#39; with '
+    .replace(/&quot;/g, '"') // Replace &quot; with "
+    .replace(/&amp;/g, "&") // Replace &amp; with &
+    .replace(/&gt;/g, ">") // Replace &gt; with >
+    .replace(/&lt;/g, "<") // Replace &lt; with <
+    .trim();
 }
 
-function NoiseBg() {
-    return (
-        <>
-            <style>{`
-        @keyframes grain {
-          0%,100% { transform: translate(0,0); }
-          10% { transform: translate(-2%,-3%); }
-          20% { transform: translate(3%,1%); }
-          30% { transform: translate(-1%,4%); }
-          40% { transform: translate(4%,-2%); }
-          50% { transform: translate(-3%,3%); }
-          60% { transform: translate(2%,-4%); }
-          70% { transform: translate(-4%,2%); }
-          80% { transform: translate(1%,-1%); }
-          90% { transform: translate(-2%,4%); }
-        }
-        .grain-layer { animation: grain 0.4s steps(1) infinite; }
-      `}</style>
-            <div
-                aria-hidden
-                className="grain-layer pointer-events-none fixed inset-[-25%] z-0 opacity-[0.03]"
-                style={{
-                    backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
-                    backgroundRepeat: "repeat",
-                    backgroundSize: "128px 128px",
-                }}
-            />
-        </>
-    );
-}
-
-/* ─────────────────────────────────────────────
-   404-specific: floating star particles
-───────────────────────────────────────────── */
-function StarField() {
-    const [stars, setStars] = useState([]);
-
-    useEffect(() => {
-        setStars(
-            Array.from({ length: 48 }, (_, i) => ({
-                id: i,
-                x: Math.random() * 100,
-                y: Math.random() * 100,
-                size: Math.random() * 1.5 + 0.5,
-                delay: Math.random() * 4,
-                duration: Math.random() * 3 + 2,
-            }))
-        );
-    }, []);
-
-    return (
-        <div aria-hidden className="pointer-events-none fixed inset-0 z-[1] overflow-hidden">
-            {stars.map((s) => (
-                <motion.span
-                    key={s.id}
-                    className="absolute rounded-full bg-foreground"
-                    style={{
-                        left: `${s.x}%`,
-                        top: `${s.y}%`,
-                        width: s.size,
-                        height: s.size,
-                    }}
-                    animate={{ opacity: [0.1, 0.7, 0.1] }}
-                    transition={{
-                        duration: s.duration,
-                        delay: s.delay,
-                        repeat: Infinity,
-                        ease: "easeInOut",
-                    }}
-                />
-            ))}
+function ThinkingBlock({ thinking, streaming }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 transition-colors px-2 py-1 rounded-md border border-gray-700 bg-gray-900"
+      >
+        {streaming ? (
+          <span className="flex items-center gap-1">
+            <span className="size-2 rounded-full bg-yellow-400 animate-pulse" />
+            Thinking...
+          </span>
+        ) : (
+          <span className="flex items-center gap-1">
+            <span className="size-2 rounded-full bg-green-500" />
+            Thought process
+          </span>
+        )}
+        {open ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+      </button>
+      {open && (
+        <div className="mt-1 p-3 rounded-md border border-gray-700 bg-gray-900/50 text-xs text-gray-400 whitespace-pre-wrap max-h-60 overflow-y-auto">
+          {thinking}
+          {streaming && <span className="animate-pulse">▌</span>}
         </div>
-    );
+      )}
+    </div>
+  );
 }
 
-/* ─────────────────────────────────────────────
-   404-specific: glitch on "404"
-───────────────────────────────────────────── */
-function GlitchText({ children, className = "" }) {
+function LoadingThinking() {
+  return (
+    <div className="flex-1 items-center gap-2 text-sm text-gray-400">
+      <div className="flex-1 gap-1">
+        <span className="size-2 rounded-full bg-gray-400 animate-bounce [animation-delay:0ms]" />
+        <span className="size-2 rounded-full bg-gray-400 animate-bounce [animation-delay:150ms]" />
+        <span className="size-2 rounded-full bg-gray-400 animate-bounce [animation-delay:300ms]" />
+      </div>
+      Model is thinking...
+    </div>
+  );
+}
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="text-xs px-2 py-1 rounded   transition-colors"
+    >
+      {copied ? "Copied!" : "Copy"}
+    </button>
+  );
+}
+
+const mdComponents = {
+  h1: ({ children }) => <h1 className="text-2xl font-bold mt-4 mb-2">{children}</h1>,
+  h2: ({ children }) => <h2 className="text-xl font-bold mt-4 mb-2">{children}</h2>,
+  h3: ({ children }) => <h3 className="text-lg font-semibold mt-3 mb-1">{children}</h3>,
+  p: ({ children }) => <p className="mb-3 leading-relaxed">{children}</p>,
+  ul: ({ children }) => <ul className="list-disc list-inside mb-3 space-y-1">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal list-inside mb-3 space-y-1">{children}</ol>,
+  li: ({ children }) => <li className="ml-2">{children}</li>,
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-4 border-gray-500 pl-4 my-3 text-gray-400 italic">{children}</blockquote>
+  ),
+  hr: () => <hr className="border-gray-700 my-4" />,
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noreferrer" className="text-blue-400 underline hover:text-blue-300">{children}</a>
+  ),
+  // Tables
+  table: ({ children }) => (
+    <div className="overflow-x-auto my-3">
+      <table className="w-full text-sm border border-gray-700 rounded-lg overflow-hidden">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="">{children}</thead>,
+  tbody: ({ children }) => <tbody className="divide-y divide-gray-700">{children}</tbody>,
+  tr: ({ children }) => <tr>{children}</tr>,
+  th: ({ children }) => <th className="px-4 py-2 text-left font-semibold border-b border-gray-700">{children}</th>,
+  td: ({ children }) => <td className="px-4 py-2">{children}</td>,
+  // Code
+  code({ inline, className, children, ...props }) {
+    if (inline) return <code className="px-1.5 py-0.5 rounded text-sm font-mono">{children}</code>;
+
+    // Extract language and optional filename from className (e.g. "language-js:index.js")
+    const raw = className?.replace("language-", "") || "";
+    const [lang, filename] = raw.includes(":") ? raw.split(":") : [raw, null];
+    const codeText = String(children).replace(/\n$/, "");
+    const label = filename || lang || null;
+
     return (
-        <span
-            className={`relative inline-block select-none ${className}`}
-            data-text={children}
-        >
-      {children}
-            <style>{`
-        [data-text="404"]::before,
-        [data-text="404"]::after {
-          content: attr(data-text);
-          position: absolute;
-          inset: 0;
-          pointer-events: none;
-        }
-        [data-text="404"]::before {
-          color: oklch(0.72 0.18 260);
-          animation: g404-a 3.2s infinite steps(1);
-          clip-path: polygon(0 10%, 100% 10%, 100% 44%, 0 44%);
-          transform: translate(-3px, -1px);
-        }
-        [data-text="404"]::after {
-          color: oklch(0.75 0.14 140);
-          animation: g404-b 3.2s infinite steps(1);
-          clip-path: polygon(0 60%, 100% 60%, 100% 90%, 0 90%);
-          transform: translate(3px, 1px);
-        }
-        @keyframes g404-a {
-          0%,78%,100% { opacity:0; transform:translate(0); }
-          80% { opacity:1; transform:translate(-4px,-1px); }
-          82% { opacity:1; transform:translate(3px,0); }
-          84% { opacity:1; transform:translate(-2px,1px); }
-          86% { opacity:0; }
-        }
-        @keyframes g404-b {
-          0%,78%,100% { opacity:0; transform:translate(0); }
-          81% { opacity:1; transform:translate(4px,1px); }
-          83% { opacity:1; transform:translate(-3px,0); }
-          85% { opacity:1; transform:translate(2px,-1px); }
-          87% { opacity:0; }
-        }
-      `}</style>
-    </span>
+      <div className="my-3 rounded-lg overflow-hidden border border-gray-700">
+        <div className="flex items-center justify-between px-4 py-1.5 bg-gray-800 text-xs text-white">
+          <span>{label ?? ""}</span>
+          <CopyButton text={codeText} />
+        </div>
+        <pre className="p-4 overflow-x-auto">
+          <code className={className} {...props}>{children}</code>
+        </pre>
+      </div>
     );
+  },
+};
+
+function VisionResult({ data }) {
+  return (
+    <div className="w-full max-w-3xl space-y-3 text-sm">
+      <p>{data.summary}</p>
+      {data.scene && <p className="text-gray-400 text-xs">Scene: {data.scene}</p>}
+      {data.objects?.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {data.objects.map((o, i) => (
+            <span key={i} className="px-2 py-0.5  rounded-full text-xs">{o}</span>
+          ))}
+        </div>
+      )}
+      {data.colors?.length > 0 && (
+        <div className="flex gap-1 items-center">
+          <span className="text-xs text-gray-400">Colors:</span>
+          {data.colors.map((c, i) => (
+            <span key={i} className="px-2 py-0.5 rounded-full text-xs">{c}</span>
+          ))}
+        </div>
+      )}
+      {data.text_content && <p className="text-xs text-gray-400 italic">Text detected: {data.text_content}</p>}
+    </div>
+  );
 }
 
-/* ─────────────────────────────────────────────
-   Orbit animation around icon
-───────────────────────────────────────────── */
-function OrbitRing({ radius = 52, duration = 6, reverse = false, dotColor = "var(--primary)" }) {
+function AssistantMessage({ m }) {
+  // Thinking models: thinking & content come as separate fields
+  // Normal models: only content, no thinking
+  if (m.vision) return <VisionResult data={m.vision} />;
+
+  const hasThinking = !!m.thinking;
+  const response = stripJunk(m.content || "");
+
+  if (!hasThinking) {
+    if (m.streaming) return <LoadingThinking />;
     return (
-        <motion.div
-            className="absolute"
-            style={{ width: radius * 2, height: radius * 2 }}
-            animate={{ rotate: reverse ? -360 : 360 }}
-            transition={{ duration, repeat: Infinity, ease: "linear" }}
-        >
-      <span
-          className="absolute h-2 w-2 rounded-full"
-          style={{
-              background: dotColor,
-              top: 0,
-              left: "50%",
-              transform: "translateX(-50%)",
-              boxShadow: `0 0 6px ${dotColor}`,
-          }}
-      />
-            <span
-                className="absolute inset-0 rounded-full border border-dashed opacity-20"
-                style={{ borderColor: dotColor }}
-            />
-        </motion.div>
+      <div className="w-full max-w-3xl">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={mdComponents}>
+          {response}
+        </ReactMarkdown>
+      </div>
     );
+  }
+
+  return (
+    <div className="w-full max-w-3xl">
+      <ThinkingBlock thinking={stripJunk(m.thinking)} streaming={m.streaming} />
+      {!m.streaming && response && (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={mdComponents}>
+          {response}
+        </ReactMarkdown>
+      )}
+    </div>
+  );
 }
 
-/* ─────────────────────────────────────────────
-   Live timestamp
-───────────────────────────────────────────── */
-function Timestamp() {
-    const [ts, setTs] = useState("");
-    useEffect(() => {
-        const tick = () =>
-            setTs(new Date().toISOString().replace("T", "  ").slice(0, 22) + " UTC");
-        tick();
-        const id = setInterval(tick, 1000);
-        return () => clearInterval(id);
-    }, []);
-    return <span className="font-mono text-xs tabular-nums text-muted-foreground">{ts}</span>;
-}
+export default function ChatPage() {
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [models, setModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [messages, setMessages] = useState([]);
+  const [attachedImage, setAttachedImage] = useState(null); // { base64, preview }
 
-/* ─────────────────────────────────────────────
-   Main 404 Page
-───────────────────────────────────────────── */
-export default function NotFoundPage() {
-    const router = useRouter();
-    const pathname = usePathname();
+  const chatRef = useRef(null);
+  const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const abortRef = useRef(null);
 
-    const mouseX = useMotionValue(0);
-    const mouseY = useMotionValue(0);
-    const smoothX = useSpring(mouseX, { stiffness: 60, damping: 20 });
-    const smoothY = useSpring(mouseY, { stiffness: 60, damping: 20 });
-    const bgX = useTransform(smoothX, [-1, 1], ["-10px", "10px"]);
-    const bgY = useTransform(smoothY, [-1, 1], ["-10px", "10px"]);
-
-    const handleMouseMove = (e) => {
-        mouseX.set((e.clientX / window.innerWidth - 0.5) * 2);
-        mouseY.set((e.clientY / window.innerHeight - 0.5) * 2);
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(",")[1]; // strip data:image/...;base64,
+      setAttachedImage({ base64, preview: reader.result });
     };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
 
-    return (
-        <div
-            className="relative min-h-screen overflow-hidden bg-background text-foreground"
-            onMouseMove={handleMouseMove}
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const res = await fetch("/api/models");
+        if (!res.ok) throw new Error("Failed to fetch models");
+        const data = await res.json();
+        setModels(data || []);
+        if (data?.length > 0) setSelectedModel(data[0].name);
+      } catch (err) {
+        console.error("Models error:", err);
+      }
+    };
+    loadModels();
+  }, []);
+
+  useEffect(() => {
+    chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages]);
+
+  const stopGeneration = () => {
+    abortRef.current?.abort();
+  };
+
+  const sendMessage = async () => {
+    if ((!input.trim() && !attachedImage) || !selectedModel || loading) return;
+    setLoading(true);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const userMessage = {
+      role: "user",
+      content: input,
+      ...(attachedImage && { images: [attachedImage.base64], preview: attachedImage.preview }),
+    };
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    setInput("");
+    setAttachedImage(null);
+
+    setMessages((prev) => [...prev, { role: "assistant", content: "", thinking: "", streaming: true }]);
+
+    // Build messages for API (exclude preview field)
+    const apiMessages = newMessages.map(({ preview, ...m }) => m);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({ messages: apiMessages, model: selectedModel }),
+      });
+
+      const contentType = res.headers.get("content-type") || "";
+
+      if (contentType.includes("application/json")) {
+        const data = await res.json();
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            role: "assistant",
+            content: data.response || "",
+            thinking: data.thinking || "",
+            vision: data.type === "vision" ? data.data : null,
+            streaming: false,
+          };
+          return updated;
+        });
+      } else {
+        // Normal model: stream plain text
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          fullText += decoder.decode(value);
+          setMessages((prev) => {
+            const updated = [...prev];
+            updated[updated.length - 1] = { role: "assistant", content: fullText, thinking: "", streaming: true };
+            return updated;
+          });
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") console.error("Chat error:", err);
+    } finally {
+      setMessages((prev) => {
+        const updated = [...prev];
+        if (updated.at(-1)?.role === "assistant") updated[updated.length - 1].streaming = false;
+        return updated;
+      });
+      setLoading(false);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = el.scrollHeight + "px";
+  }, [input]);
+
+  return (
+    <div className="flex flex-col h-screen">
+      {/* Header */}
+      <div className="p-4 border-b border-gray-800 flex justify-between items-center shrink-0">
+        <h1 className="font-semibold">Ollama Chat</h1>
+        <select
+          value={selectedModel}
+          onChange={(e) => setSelectedModel(e.target.value)}
+          className="border border-gray-700 bg-transparent p-1 rounded text-sm"
         >
-            <NoiseBg />
-            <Scanlines />
-            <StarField />
+          {models.map((m, i) => (
+            <option key={i} value={m.name}>{m.name}</option>
+          ))}
+        </select>
+      </div>
 
-            {/* Vignette */}
-            <div
-                aria-hidden
-                className="pointer-events-none fixed inset-0 z-[1]"
-                style={{
-                    background:
-                        "radial-gradient(ellipse 75% 70% at 50% 50%, transparent 15%, hsl(var(--background)/0.75) 100%)",
-                }}
-            />
+      {/* Chat area */}
+      <div ref={chatRef} className="flex-1 overflow-y-auto px-4 py-6 mb-[150px] flex flex-col items-center gap-6">
+        {messages.map((m, i) =>
+          m.role === "assistant" ? (
+            <AssistantMessage key={i} m={m} />
+          ) : (
+            <div key={i} className="w-full max-w-3xl flex justify-end">
+              <div className="flex flex-col items-end gap-1 max-w-[80%]">
+                {m.preview && (
+                  <img src={m.preview} alt="attachment" className="max-h-48 rounded-xl object-cover" />
+                )}
+                {m.content && (
+                  <Badge variant="outline" className="rounded-lg text-lg p-2 px-4 py-2 whitespace-pre-wrap">
+                    {m.content}
+                  </Badge>
+                )}
+              </div>
+            </div>
+          )
+        )}
+        <div className="h-40" />
+      </div>
 
-            {/* Blue/indigo ambient glow */}
-            <motion.div
-                aria-hidden
-                className="pointer-events-none absolute left-1/2 top-1/2 z-[1] h-[580px] w-[580px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-                style={{
-                    background:
-                        "radial-gradient(circle, oklch(0.55 0.18 260 / 0.10) 0%, transparent 70%)",
-                    x: bgX,
-                    y: bgY,
-                }}
-            />
-
-            <main className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 py-20">
-                <motion.div
-                    variants={stagger}
-                    initial="hidden"
-                    animate="visible"
-                    className="flex w-full max-w-xl flex-col items-center gap-6 text-center"
+      {/* Input */}
+      <div className="fixed bottom-0 w-full flex justify-center px-4 pb-6 pointer-events-none">
+        <div className="w-full max-w-3xl pointer-events-auto">
+          <div className="flex items-end gap-2 rounded-2xl border bg-background p-2 shadow-sm">
+            <Button variant="ghost" size="icon">
+              <Plus className="size-5" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()}>
+              <Paperclip className="size-5" />
+            </Button>
+            <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+            {attachedImage && (
+              <div className="relative shrink-0">
+                <img src={attachedImage.preview} alt="preview" className="size-10 rounded-lg object-cover" />
+                <button
+                  onClick={() => setAttachedImage(null)}
+                  className="absolute -top-1 -right-1 size-4 bg-gray-600 rounded-full flex items-center justify-center"
                 >
-                    {/* Icon with orbit rings */}
-                    <motion.div
-                        variants={fadeUp}
-                        custom={0.05}
-                        className="relative flex h-44 w-44 items-center justify-center"
-                    >
-                        <OrbitRing radius={64} duration={7} dotColor="oklch(0.6 0.18 260)" />
-                        <OrbitRing radius={46} duration={4.5} reverse dotColor="oklch(0.65 0.14 180)" />
-
-                        <motion.div
-                            initial={{ scale: 0.5, opacity: 0, rotate: 15 }}
-                            animate={{ scale: 1, opacity: 1, rotate: 0 }}
-                            transition={{ duration: 0.7, delay: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                            className="relative z-10 flex h-20 w-20 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 shadow-[0_0_40px_oklch(0.55_0.18_260/0.2)]"
-                        >
-                            <Telescope className="size-9 text-primary" strokeWidth={1.5} />
-                        </motion.div>
-                    </motion.div>
-
-                    {/* 404 */}
-                    <motion.div variants={fadeUp} custom={0.1} className="leading-none">
-                        <GlitchText className="text-[clamp(5rem,18vw,9rem)] font-black tracking-tighter text-foreground/90">
-                            404
-                        </GlitchText>
-                    </motion.div>
-
-                    {/* Title */}
-                    <motion.h1
-                        variants={fadeUp}
-                        custom={0.15}
-                        className="text-2xl font-bold tracking-tight sm:text-3xl"
-                    >
-                        Page Not Found
-                    </motion.h1>
-
-                    {/* Separator */}
-                    <motion.div
-                        variants={fadeUp}
-                        custom={0.2}
-                        className="flex w-full items-center gap-3"
-                    >
-                        <Separator className="flex-1 bg-border/60" />
-                        <Compass className="size-4 shrink-0 text-muted-foreground/50" />
-                        <Separator className="flex-1 bg-border/60" />
-                    </motion.div>
-
-                    {/* Description */}
-                    <motion.p
-                        variants={fadeUp}
-                        custom={0.25}
-                        className="max-w-sm text-sm leading-relaxed text-muted-foreground"
-                    >
-                        The page you're looking for has drifted into the void. It may have
-                        been moved, renamed, or never existed in this universe.
-                    </motion.p>
-
-                    {/* Log block */}
-                    <motion.div
-                        variants={fadeUp}
-                        custom={0.3}
-                        className="w-full rounded-lg border border-border/60 bg-muted/40 px-4 py-3 text-left font-mono text-xs text-muted-foreground backdrop-blur-sm"
-                    >
-                        <div className="flex items-center justify-between">
-                            <span className="text-primary/80">ERR_NOT_FOUND</span>
-                            <Timestamp />
-                        </div>
-                        <div className="mt-1.5 space-y-0.5 text-[11px]">
-                            <div>
-                                <span className="text-muted-foreground/50">PATH&nbsp;&nbsp;&nbsp; </span>
-                                <span className="text-foreground/70">{pathname}</span>
-                            </div>
-                            <div>
-                                <span className="text-muted-foreground/50">STATUS  </span>
-                                <span className="text-primary">404 Not Found</span>
-                            </div>
-                            <div>
-                                <span className="text-muted-foreground/50">REASON  </span>
-                                <span className="text-foreground/70">Resource does not exist</span>
-                            </div>
-                        </div>
-                    </motion.div>
-
-                    {/* Actions */}
-                    <motion.div
-                        variants={fadeUp}
-                        custom={0.35}
-                        className="flex w-full flex-col gap-3 sm:flex-row sm:justify-center"
-                    >
-                        <Button variant="outline" className="gap-2" onClick={() => router.back()}>
-                            <ArrowLeft className="size-4" />
-                            Go Back
-                        </Button>
-                        <Button onClick={() => router.push("/")}>Return Home</Button>
-                    </motion.div>
-                </motion.div>
-
-                <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: 1.2, duration: 0.8 }}
-                    className="absolute bottom-8 font-mono text-[10px] tracking-widest text-muted-foreground/30 uppercase"
-                >
-                    ResearchHub · Deep Space · Page Not Located
-                </motion.p>
-            </main>
+                  <X className="size-2.5" />
+                </button>
+              </div>
+            )}
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask anything"
+              className="min-h-10 max-h-40 resize-none border-0 focus-visible:ring-0"
+            />
+            {loading ? (
+              <Button size="icon" onClick={stopGeneration} className="rounded-full bg-red-600 hover:bg-red-700">
+                <Square className="size-4 fill-current" />
+              </Button>
+            ) : (
+              <Button size="icon" onClick={sendMessage} className="rounded-full">
+                <ArrowUpIcon />
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-center text-muted-foreground mt-2">
+            AI can make mistakes. Check important info.
+          </p>
         </div>
-    );
+      </div>
+    </div>
+  );
 }
